@@ -101,6 +101,30 @@ td.best{color:var(--ok);font-weight:600}
 .urow:last-child{border-bottom:0}
 .urow .nm{font-weight:600}
 .urow .rl{font-size:12px;color:var(--muted)}
+.wrap.wide{max-width:1440px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.toolbar input{flex:1;min-width:180px}
+.seg{display:flex;border:1px solid var(--line);border-radius:999px;padding:3px;background:var(--surface)}
+.seg button{border:0;background:none;color:var(--muted);font:600 13px var(--font);padding:6px 12px;border-radius:999px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(190px,1fr);gap:12px;overflow-x:auto;padding-bottom:8px;align-items:start;scroll-snap-type:x proximity}
+.col{background:var(--surface);border:1px solid var(--line);border-radius:14px;display:grid;grid-template-rows:auto 1fr;min-height:220px;scroll-snap-align:start}
+.col-h{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);font-weight:600;font-size:14px}
+.col-h .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:8px;vertical-align:middle}
+.col-h .cnt{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;background:var(--bg);border-radius:999px;padding:2px 8px}
+.col-b{display:grid;gap:8px;padding:10px;align-content:start;min-height:140px}
+.col.over{outline:2px dashed var(--coral);outline-offset:-4px}
+.k{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:grid;gap:4px;cursor:grab}
+.k:hover{border-color:var(--coral)}
+.k .t{font-weight:600;font-size:14px;overflow-wrap:anywhere}
+.k .m{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.k .row{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:2px}
+.k .next{border:0;background:var(--coral);color:#fff;border-radius:8px;font:600 12px var(--font);padding:5px 8px;cursor:pointer;white-space:nowrap}
+.k.dragging{opacity:.4}
+.col-empty{font-size:12px;color:var(--muted);text-align:center;padding:16px 4px}
+.modal{position:fixed;inset:0;background:rgba(10,6,25,.55);display:grid;place-items:center;padding:16px;z-index:20}
+.modal-in{width:100%;max-width:560px;max-height:90vh;overflow:auto;display:grid;gap:8px}
+.modal-x{justify-self:end}
 @media (max-width:480px){.form{grid-template-columns:1fr}.kpi .v{font-size:22px}.f-row{grid-template-columns:88px 1fr 58px}}
 @media (prefers-reduced-motion:no-preference){.f-bar i{transition:width .3s ease}}
 </style>
@@ -133,7 +157,12 @@ td.best{color:var(--ok);font-weight:600}
   </nav>
 
   <section id="v-lista" style="display:grid;gap:16px">
-    <form class="card form" id="f-nuevo" autocomplete="off">
+    <div class="toolbar">
+      <button class="btn small" id="nuevo-toggle" type="button">+ Nuevo prospecto</button>
+      <input id="q" type="search" placeholder="Buscar por negocio o Instagram" aria-label="Buscar">
+      <div class="seg" id="seg"><button type="button" data-v="tablero">Tablero</button><button type="button" data-v="lista">Lista</button></div>
+    </div>
+    <form class="card form" id="f-nuevo" autocomplete="off" hidden>
       <label>Negocio<input id="n-negocio" required placeholder="Ej. Café La Esquina"></label>
       <label>Instagram<input id="n-ig" placeholder="@usuario" autocapitalize="none"></label>
       <label>País<select id="n-pais"></select></label>
@@ -146,9 +175,9 @@ td.best{color:var(--ok);font-weight:600}
         <button class="btn" type="submit" id="n-btn">Agregar prospecto</button>
       </div>
     </form>
-    <input id="q" type="search" placeholder="Buscar por negocio o Instagram" aria-label="Buscar">
     <div class="filters" id="filters"></div>
     <div class="list" id="list"></div>
+    <div class="board" id="board" hidden></div>
   </section>
 
   <section id="v-panel" hidden style="display:grid;gap:16px">
@@ -179,6 +208,8 @@ td.best{color:var(--ok);font-weight:600}
     <div class="card" id="u-list"></div>
   </section>
 </div>
+
+<div class="modal" id="modal" hidden><div class="modal-in" id="modal-in"></div></div>
 
 <script>
 const ETAPAS=[["calentado","Calentado"],["dm","DM enviado"],["respondio","Respondió"],["agendada","Agendada"],["presentada","Se presentó"],["cerro","Cerró"]];
@@ -226,7 +257,7 @@ const fmt=iso=>iso?new Date(iso).toLocaleDateString("es",{day:"numeric",month:"s
 
 // ---------- pestañas ----------
 const TABS=["lista","panel","msgs","equipo"];
-function tab(which){TABS.forEach(t=>{$("tab-"+t).setAttribute("aria-selected",t===which);$("v-"+t).hidden=t!==which;});try{localStorage.setItem("tab",which)}catch(e){}if(which==="panel")renderPanel();if(which==="msgs")renderMsgs();if(which==="equipo")cargarUsuarios();}
+function tab(which){TABS.forEach(t=>{$("tab-"+t).setAttribute("aria-selected",t===which);$("v-"+t).hidden=t!==which;});setWide();try{localStorage.setItem("tab",which)}catch(e){}if(which==="panel")renderPanel();if(which==="msgs")renderMsgs();if(which==="equipo")cargarUsuarios();}
 TABS.forEach(t=>$("tab-"+t).onclick=()=>tab(t));
 
 // ---------- escritura ----------
@@ -245,11 +276,47 @@ $("f-nuevo").addEventListener("submit",async ev=>{ev.preventDefault();
 
 // ---------- lista ----------
 const necesitaSeguimiento=r=>r.etapa==="dm"&&(r.seguimientos||0)<2&&diasDesde(r.ultimoContacto||r.historial?.dm)>=1;
+let vista="tablero",modalId=null;
+try{const v=localStorage.getItem("vista");if(v==="lista"||v==="tablero")vista=v;}catch(e){}
+const COLOR={calentado:"var(--muted)",dm:"var(--ink)",respondio:"var(--warn)",agendada:"var(--coral)",presentada:"var(--coral)",cerro:"var(--ok)",no:"var(--no)"};
+function setWide(){$("v-app").classList.toggle("wide",!$("v-lista").hidden&&vista==="tablero");}
+function renderSeg(){$("seg").querySelectorAll("button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.v===vista));}
+$("seg").querySelectorAll("button").forEach(b=>b.onclick=()=>{vista=b.dataset.v;try{localStorage.setItem("vista",vista)}catch(e){}renderLista();});
+$("nuevo-toggle").onclick=()=>{const f=$("f-nuevo");f.hidden=!f.hidden;$("nuevo-toggle").textContent=f.hidden?"+ Nuevo prospecto":"Cerrar formulario";if(!f.hidden)$("n-negocio").focus();};
+function visibles(){const q=$("q").value.trim().toLowerCase();const f=vista==="tablero"&&filtro!=="seguir"?"todos":filtro;
+  let vis=rows.filter(r=>f==="todos"||(f==="seguir"?necesitaSeguimiento(r):r.etapa===f));
+  if(q)vis=vis.filter(r=>(r.negocio||"").toLowerCase().includes(q)||(r.instagram||"").toLowerCase().includes(q));return vis;}
 function renderFilters(){const c={todos:rows.length,seguir:rows.filter(necesitaSeguimiento).length};ALL.forEach(([k])=>c[k]=rows.filter(r=>r.etapa===k).length);
-  const box=$("filters");box.innerHTML="";[["todos","Todos"],["seguir","Toca seguimiento"],...ALL].forEach(([k,l])=>{const b=el("button","chip",l);b.type="button";b.setAttribute("aria-pressed",filtro===k);b.appendChild(el("span","n",String(c[k]||0)));b.onclick=()=>{filtro=k;renderLista();};box.appendChild(b);});}
-function renderLista(){renderFilters();const q=$("q").value.trim().toLowerCase();const list=$("list");list.innerHTML="";
-  let vis=rows.filter(r=>filtro==="todos"||(filtro==="seguir"?necesitaSeguimiento(r):r.etapa===filtro));
-  if(q)vis=vis.filter(r=>(r.negocio||"").toLowerCase().includes(q)||(r.instagram||"").toLowerCase().includes(q));
+  const items=vista==="tablero"?[["todos","Todos"],["seguir","Toca seguimiento"]]:[["todos","Todos"],["seguir","Toca seguimiento"],...ALL];
+  const cur=vista==="tablero"&&filtro!=="seguir"?"todos":filtro;
+  const box=$("filters");box.innerHTML="";items.forEach(([k,l])=>{const b=el("button","chip",l);b.type="button";b.setAttribute("aria-pressed",cur===k);b.appendChild(el("span","n",String(c[k]||0)));b.onclick=()=>{filtro=k;renderLista();};box.appendChild(b);});}
+function renderBoard(){const b=$("board");const sx=b.scrollLeft;b.innerHTML="";const vis=visibles();
+  ALL.forEach(([k,l])=>{const col=el("section","col");const items=vis.filter(r=>r.etapa===k);
+    const h=el("div","col-h");const left=el("span");const dot=el("span","dot");dot.style.background=COLOR[k];left.append(dot,l);h.append(left,el("span","cnt",String(items.length)));
+    const body=el("div","col-b");if(!items.length)body.appendChild(el("div","col-empty",k==="calentado"&&!rows.length?"Agrega tu primer prospecto con + Nuevo prospecto":"Arrastra aquí"));items.forEach(r=>body.appendChild(kcard(r)));
+    col.append(h,body);
+    col.addEventListener("dragover",e=>{e.preventDefault();col.classList.add("over");});
+    col.addEventListener("dragleave",e=>{if(!col.contains(e.relatedTarget))col.classList.remove("over");});
+    col.addEventListener("drop",e=>{e.preventDefault();col.classList.remove("over");const r=rows.find(x=>x.id===e.dataTransfer.getData("text/plain"));if(r&&r.etapa!==k)setEtapa(r,k);});
+    b.appendChild(col);});
+  b.scrollLeft=sx;}
+function kcard(r){const c=el("div","k");c.tabIndex=0;c.setAttribute("role","button");c.setAttribute("aria-label","Abrir "+(r.negocio||"prospecto"));c.draggable=true;
+  c.addEventListener("dragstart",e=>{e.dataTransfer.setData("text/plain",r.id);e.dataTransfer.effectAllowed="move";c.classList.add("dragging");});
+  c.addEventListener("dragend",()=>c.classList.remove("dragging"));
+  const open=()=>{modalId=r.id;renderModal();};c.onclick=open;c.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();open();}};
+  c.appendChild(el("div","t",r.negocio||"Sin nombre"));
+  c.appendChild(el("div","m",[r.instagram?"@"+r.instagram:null,r.pais,r.rubro].filter(Boolean).join(" · ")));
+  const row=el("div","row");const seg=necesitaSeguimiento(r);row.appendChild(el("span",seg?"flag":"m",seg?"Toca seguimiento":"Msg "+(r.mensaje||"-")+(r.porNombre?" · "+r.porNombre:"")));
+  const k=ORDER[r.etapa];if(r.etapa!=="no"&&k<ETAPAS.length-1){const nx=ETAPAS[k+1];const nb=el("button","next","→ "+nx[1]);nb.type="button";nb.title="Mover a "+nx[1];nb.onclick=e=>{e.stopPropagation();nb.disabled=true;setEtapa(r,nx[0]);};row.appendChild(nb);}
+  c.appendChild(row);return c;}
+function renderModal(){const m=$("modal");const r=rows.find(x=>x.id===modalId);if(!r){closeModal();return;}const inn=$("modal-in");const st=inn.scrollTop;inn.innerHTML="";const x=el("button","btn small ghost modal-x","Cerrar");x.type="button";x.onclick=closeModal;inn.append(x,card(r));m.hidden=false;inn.scrollTop=st;}
+function closeModal(){modalId=null;confirmDel=null;$("modal").hidden=true;}
+$("modal").addEventListener("click",e=>{if(e.target.id==="modal")closeModal();});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&modalId)closeModal();});
+function renderLista(){renderSeg();renderFilters();setWide();$("list").hidden=vista!=="lista";$("board").hidden=vista!=="tablero";
+  if(vista==="tablero"){renderBoard();if(modalId)renderModal();return;}
+  const list=$("list");list.innerHTML="";const vis=visibles();
+  if(modalId)renderModal();
   if(!vis.length){const e=el("div","card empty");const s=el("strong",null,rows.length?"Nada por aquí":"Todavía no hay prospectos");e.append(s,rows.length?"Prueba otro filtro o búsqueda.":"Agrega el primer negocio con el formulario de arriba. Queda guardado en la nube y aparece en el panel.");list.appendChild(e);return;}
   vis.forEach(r=>list.appendChild(card(r)));}
 function card(r){const c=el("article","p");
