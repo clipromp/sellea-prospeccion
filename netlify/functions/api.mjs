@@ -100,6 +100,30 @@ async function leerDatos() {
   return { prospectos: lista, mensajes: m || {} };
 }
 
+// ---------- registro de actividad ----------
+// Un documento por mes: log/AAAA-MM con { entradas: [...] }
+async function registrar(me, accion, extra = {}) {
+  const t = ahora();
+  const e = { t, u: me.usuario, nombre: me.nombre, accion, ...extra };
+  try {
+    await mutar("log/" + t.slice(0, 7), (cur) => {
+      cur = cur || { entradas: [] };
+      cur.entradas.push(e);
+      if (cur.entradas.length > 20000) cur.entradas = cur.entradas.slice(-20000);
+      return cur;
+    });
+  } catch (err) { console.error("No se pudo registrar la actividad", err); }
+}
+const CAMPOS_LOG = ["negocio", "instagram", "pais", "rubro", "mensaje", "etapa", "nota", "seguimientos"];
+function diferencias(antes = {}, despues = {}) {
+  const c = {};
+  for (const k of CAMPOS_LOG) {
+    const a = antes[k] ?? null, d = despues[k] ?? null;
+    if (JSON.stringify(a) !== JSON.stringify(d)) c[k] = [a, d];
+  }
+  return c;
+}
+
 // ---------- rutas ----------
 export default async (req) => {
   const url = new URL(req.url);
@@ -127,6 +151,7 @@ export default async (req) => {
         await new Promise((ok) => setTimeout(ok, 700));
         return json({ error: "Usuario o contraseña incorrectos." }, 401);
       }
+      await registrar({ usuario, nombre: u.nombre }, "entro");
       const tok = firmar({ u: usuario, exp: Date.now() + SESION_DIAS * DIA });
       return json({ usuario, nombre: u.nombre, rol: u.rol }, 200, { "set-cookie": cookieSesion(tok, SESION_DIAS * 86400) });
     }
@@ -146,21 +171,41 @@ export default async (req) => {
     if (ruta === "prospectos" && metodo === "POST") {
       const b = await cuerpo();
       const datos = limpiar(b.datos);
+      let antes = null, despues = null;
       await mutar("prospectos", (cur) => {
         cur = cur || { items: {} };
         if (b.accion === "crear") {
           if (!datos.negocio) throw Object.assign(new Error("Falta el nombre del negocio."), { status: 400 });
           const id = crypto.randomUUID();
-          cur.items[id] = { seguimientos: 0, historial: {}, ...datos, id, creado: ahora(), actualizado: ahora(), por: me.usuario, porNombre: me.nombre };
+          antes = null;
+          despues = cur.items[id] = { seguimientos: 0, historial: {}, ...datos, id, creado: ahora(), actualizado: ahora(), por: me.usuario, porNombre: me.nombre };
         } else if (b.accion === "actualizar") {
           const it = cur.items[b.id];
           if (!it) throw Object.assign(new Error("Ese prospecto ya no existe."), { status: 404 });
-          cur.items[b.id] = { ...it, ...datos, actualizado: ahora() };
+          antes = it;
+          despues = cur.items[b.id] = { ...it, ...datos, actualizado: ahora() };
         } else if (b.accion === "borrar") {
+          const it = cur.items[b.id];
+          if (!it) throw Object.assign(new Error("Ese prospecto ya no existe."), { status: 404 });
+          antes = it; despues = null;
           delete cur.items[b.id];
         } else throw Object.assign(new Error("Acción no válida."), { status: 400 });
         return cur;
       });
+      if (b.accion === "crear") {
+        await registrar(me, "creo", { id: despues.id, negocio: despues.negocio, etapa: despues.etapa });
+      } else if (b.accion === "actualizar") {
+        const cambios = diferencias(antes, despues);
+        if (Object.keys(cambios).length) await registrar(me, "edito", { id: despues.id, negocio: despues.negocio, cambios });
+      } else if (b.accion === "borrar") {
+        // Nada se pierde: lo borrado pasa a la papelera
+        await mutar("papelera", (cur) => {
+          cur = cur || { items: {} };
+          cur.items[antes.id] = { ...antes, borrado: ahora(), borradoPor: me.usuario, borradoPorNombre: me.nombre };
+          return cur;
+        });
+        await registrar(me, "borro", { id: antes.id, negocio: antes.negocio, etapa: antes.etapa });
+      }
       return json(await leerDatos());
     }
 
@@ -168,8 +213,42 @@ export default async (req) => {
       const b = await cuerpo();
       const n = String(b.n || "");
       if (!["1", "2", "3", "4", "5"].includes(n)) return json({ error: "Número de mensaje no válido." }, 400);
-      await mutar("mensajes", (cur) => ({ ...(cur || {}), ["m" + n]: String(b.texto || "").slice(0, 2000), actualizado: ahora() }));
+      let anterior = "";
+      const texto = String(b.texto || "").slice(0, 2000);
+      await mutar("mensajes", (cur) => { anterior = (cur && cur["m" + n]) || ""; return { ...(cur || {}), ["m" + n]: texto, actualizado: ahora() }; });
+      if (anterior !== texto) await registrar(me, "mensaje", { n, cambios: { texto: [anterior, texto] } });
       return json(await leerDatos());
+    }
+
+    if (ruta === "actividad" && metodo === "GET") {
+      if (yo.rol !== "admin") return json({ error: "Solo el administrador puede ver la actividad." }, 403);
+      const mes = /^\d{4}-\d{2}$/.test(url.searchParams.get("mes") || "") ? url.searchParams.get("mes") : ahora().slice(0, 7);
+      const doc = await store().get("log/" + mes, { type: "json" });
+      return json({ mes, entradas: (doc?.entradas || []).slice().reverse() });
+    }
+
+    if (ruta === "papelera") {
+      if (yo.rol !== "admin") return json({ error: "Solo el administrador puede ver la papelera." }, 403);
+      const listar = async () => Object.values((await store().get("papelera", { type: "json" }))?.items || {})
+        .sort((a, c) => (c.borrado || "").localeCompare(a.borrado || ""));
+      if (metodo === "GET") return json(await listar());
+      const b = await cuerpo();
+      let item = null;
+      await mutar("papelera", (cur) => {
+        cur = cur || { items: {} };
+        item = cur.items[b.id];
+        if (!item) throw Object.assign(new Error("Ese prospecto ya no está en la papelera."), { status: 404 });
+        delete cur.items[b.id];
+        return cur;
+      });
+      if (b.accion === "restaurar") {
+        const { borrado, borradoPor, borradoPorNombre, ...limpio } = item;
+        await mutar("prospectos", (cur) => { cur = cur || { items: {} }; cur.items[limpio.id] = { ...limpio, actualizado: ahora() }; return cur; });
+        await registrar(me, "restauro", { id: item.id, negocio: item.negocio });
+      } else {
+        await registrar(me, "elimino", { id: item.id, negocio: item.negocio });
+      }
+      return json({ papelera: await listar(), ...(await leerDatos()) });
     }
 
     if (ruta === "usuarios") {
@@ -197,6 +276,7 @@ export default async (req) => {
         } else throw Object.assign(new Error("Acción no válida."), { status: 400 });
         return cur;
       });
+      await registrar(me, "usuario-" + b.accion, { usuarioAfectado: usuario });
       return json(lista(await todosLosUsuarios()));
     }
 

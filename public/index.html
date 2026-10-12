@@ -97,6 +97,12 @@ td.best{color:var(--ok);font-weight:600}
 .login{min-height:80vh;display:grid;place-items:center}
 .login .card{width:100%;max-width:380px;display:grid;gap:14px}
 .login .brand{font-size:28px}
+.log{display:grid;grid-template-columns:88px 1fr;gap:4px 12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:13px}
+.log:last-child{border-bottom:0}
+.log .when{color:var(--muted);font-variant-numeric:tabular-nums}
+.log .who{font-weight:600}
+.log .det{grid-column:2;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.log.del .what{color:var(--coral)}
 .urow{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)}
 .urow:last-child{border-bottom:0}
 .urow .nm{font-weight:600}
@@ -153,6 +159,7 @@ td.best{color:var(--ok);font-weight:600}
     <button role="tab" id="tab-lista" aria-selected="true">Prospectos</button>
     <button role="tab" id="tab-panel" aria-selected="false">Panel</button>
     <button role="tab" id="tab-msgs" aria-selected="false">Mensajes</button>
+    <button role="tab" id="tab-actividad" aria-selected="false" hidden>Actividad</button>
     <button role="tab" id="tab-equipo" aria-selected="false" hidden>Equipo</button>
   </nav>
 
@@ -195,6 +202,15 @@ td.best{color:var(--ok);font-weight:600}
   <section id="v-msgs" hidden style="display:grid;gap:16px">
     <p class="hint" style="margin:0">Aquí queda escrito el texto exacto de cada primer mensaje. Al registrar un prospecto se elige el número del mensaje que se usó, y el panel compara cuál consigue más respuestas y llamadas.</p>
     <div class="list" id="msgs-list"></div>
+  </section>
+
+  <section id="v-actividad" hidden style="display:grid;gap:16px">
+    <div class="toolbar">
+      <label style="flex:1;min-width:150px">Mes<select id="a-mes"></select></label>
+      <label style="flex:1;min-width:150px">Persona<select id="a-persona"></select></label>
+    </div>
+    <div class="card"><h2>Historial de cambios</h2><div id="a-list"></div></div>
+    <div class="card"><h2>Papelera</h2><p class="hint" style="margin:0 0 8px">Todo lo que se borra llega aquí. Puedes recuperarlo o eliminarlo para siempre.</p><div id="p-list"></div></div>
   </section>
 
   <section id="v-equipo" hidden style="display:grid;gap:16px">
@@ -241,7 +257,7 @@ async function cargar(){try{aplicar(await api("datos"));}catch(e){if(e.message!=
 
 // ---------- sesión ----------
 function showLogin(msg){me=null;$("v-app").hidden=true;$("v-login").hidden=false;$("l-err").textContent=msg||"";$("l-user").focus();}
-function showApp(){$("v-login").hidden=true;$("v-app").hidden=false;$("who-name").textContent=me.nombre;$("tab-equipo").hidden=me.rol!=="admin";cargar();}
+function showApp(){$("v-login").hidden=true;$("v-app").hidden=false;$("who-name").textContent=me.nombre;$("tab-equipo").hidden=me.rol!=="admin";$("tab-actividad").hidden=me.rol!=="admin";cargar();}
 $("f-login").addEventListener("submit",async ev=>{ev.preventDefault();$("l-btn").disabled=true;$("l-err").textContent="";
   try{me=await api("login",{usuario:$("l-user").value,clave:$("l-pass").value});$("l-pass").value="";showApp();}
   catch(e){$("l-err").textContent=e.message;}
@@ -256,8 +272,8 @@ const diasDesde=iso=>iso?(Date.now()-new Date(iso))/864e5:0;
 const fmt=iso=>iso?new Date(iso).toLocaleDateString("es",{day:"numeric",month:"short"}):"";
 
 // ---------- pestañas ----------
-const TABS=["lista","panel","msgs","equipo"];
-function tab(which){TABS.forEach(t=>{$("tab-"+t).setAttribute("aria-selected",t===which);$("v-"+t).hidden=t!==which;});setWide();try{localStorage.setItem("tab",which)}catch(e){}if(which==="panel")renderPanel();if(which==="msgs")renderMsgs();if(which==="equipo")cargarUsuarios();}
+const TABS=["lista","panel","msgs","actividad","equipo"];
+function tab(which){TABS.forEach(t=>{$("tab-"+t).setAttribute("aria-selected",t===which);$("v-"+t).hidden=t!==which;});setWide();try{localStorage.setItem("tab",which)}catch(e){}if(which==="panel")renderPanel();if(which==="msgs")renderMsgs();if(which==="equipo")cargarUsuarios();if(which==="actividad")cargarActividad();}
 TABS.forEach(t=>$("tab-"+t).onclick=()=>tab(t));
 
 // ---------- escritura ----------
@@ -345,7 +361,7 @@ function card(r){const c=el("article","p");
   save.onclick=async()=>{const datos={negocio:iN.value.trim()||r.negocio,instagram:iI.value.trim().replace(/^@/,""),pais:sP.value,rubro:sR.value,mensaje:sM.value,nota:tN.value.trim()};if(sE.value!==r.etapa){datos.etapa=sE.value;datos.historial=historialHasta(r.historial,sE.value);}
     save.disabled=true;openId=null;await actualizar(r.id,datos);};
   const delBox=el("div","confirm");
-  if(confirmDel===r.id){delBox.append("¿Borrar este prospecto? ");const y=el("button","btn small","Sí, borrar");y.type="button";y.onclick=async()=>{confirmDel=null;try{aplicar(await api("prospectos",{accion:"borrar",id:r.id}));}catch(e){if(e.message!=="401")status(e.message);}};const n=el("button","btn small ghost","Cancelar");n.type="button";n.onclick=()=>{confirmDel=null;renderLista();};delBox.append(y,n);}
+  if(confirmDel===r.id){delBox.append(me&&me.rol==="admin"?"¿Mandarlo a la papelera? ":"¿Borrar este prospecto? ");const y=el("button","btn small","Sí, borrar");y.type="button";y.onclick=async()=>{confirmDel=null;try{aplicar(await api("prospectos",{accion:"borrar",id:r.id}));}catch(e){if(e.message!=="401")status(e.message);}};const n=el("button","btn small ghost","Cancelar");n.type="button";n.onclick=()=>{confirmDel=null;renderLista();};delBox.append(y,n);}
   else{const b=el("button","btn small ghost","Borrar");b.type="button";b.onclick=()=>{confirmDel=r.id;openId=r.id;renderLista();};delBox.append(b);}
   foot.append(delBox,save);f.appendChild(foot);d.appendChild(f);c.appendChild(d);
   return c;}
@@ -401,12 +417,50 @@ $("f-user").addEventListener("submit",async ev=>{ev.preventDefault();
     $("u-hint").textContent="Usuario creado: @"+$("u-user").value.trim().toLowerCase();$("u-nombre").value="";$("u-user").value="";$("u-pass").value="";renderUsuarios();}
   catch(e){if(e.message!=="401")$("u-hint").textContent=e.message;}});
 
+// ---------- actividad y papelera (solo administrador) ----------
+const CAMPO={negocio:"nombre",instagram:"Instagram",pais:"país",rubro:"rubro",mensaje:"mensaje",etapa:"etapa",nota:"nota",seguimientos:"seguimientos",texto:"texto"};
+let actividad=[],papelera=[],confirmPerm=null;
+(function(){const s=$("a-mes");const d=new Date();for(let i=0;i<6;i++){const x=new Date(d.getFullYear(),d.getMonth()-i,1);const v=x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0");const o=document.createElement("option");o.value=v;o.textContent=x.toLocaleDateString("es",{month:"long",year:"numeric"});s.appendChild(o);}})();
+$("a-mes").onchange=()=>cargarActividad();$("a-persona").onchange=()=>renderActividad();
+async function cargarActividad(){try{const [a,p]=await Promise.all([api("actividad?mes="+$("a-mes").value),api("papelera")]);actividad=a.entradas||[];papelera=p||[];renderActividad();renderPapelera();}catch(e){if(e.message!=="401")$("a-list").textContent=e.message;}}
+const val=(k,v)=>v==null||v===""?"vacío":k==="etapa"?(LABEL[v]||v):k==="mensaje"?"Mensaje "+v:String(v);
+function describir(e){const n=e.negocio?"«"+e.negocio+"»":"";
+  switch(e.accion){
+    case "entro":return ["entró a la app",""];
+    case "creo":return ["agregó "+n,"Etapa: "+(LABEL[e.etapa]||e.etapa||"")];
+    case "borro":return ["borró "+n,"Quedó en la papelera"];
+    case "restauro":return ["recuperó "+n+" de la papelera",""];
+    case "elimino":return ["eliminó para siempre "+n,""];
+    case "mensaje":return ["cambió el texto del mensaje "+e.n,""];
+    case "usuario-crear":return ["creó el usuario @"+e.usuarioAfectado,""];
+    case "usuario-clave":return ["cambió la contraseña de @"+e.usuarioAfectado,""];
+    case "usuario-borrar":return ["le quitó el acceso a @"+e.usuarioAfectado,""];
+    case "edito":{const c=e.cambios||{};if(c.etapa&&Object.keys(c).length===1)return ["movió "+n+" de "+val("etapa",c.etapa[0])+" a "+val("etapa",c.etapa[1]),""];
+      if(c.seguimientos&&Object.keys(c).length===1)return ["marcó un seguimiento en "+n,""];
+      return ["editó "+n,Object.entries(c).map(([k,[a,d]])=>k==="nota"?"nota cambiada":(CAMPO[k]||k)+": "+val(k,a)+" → "+val(k,d)).join(" · ")];}
+    default:return [e.accion,""];}}
+function renderActividad(){const sel=$("a-persona");const cur=sel.value;const personas=[...new Map(actividad.map(e=>[e.u,e.nombre])).entries()];
+  sel.innerHTML="";const o0=document.createElement("option");o0.value="";o0.textContent="Todas";sel.appendChild(o0);personas.forEach(([u,n])=>{const o=document.createElement("option");o.value=u;o.textContent=n+" (@"+u+")";if(u===cur)o.selected=true;sel.appendChild(o);});
+  const box=$("a-list");box.innerHTML="";const vis=actividad.filter(e=>!sel.value||e.u===sel.value);
+  if(!vis.length){box.appendChild(el("p","hint","No hay actividad en este mes."));return;}
+  vis.slice(0,500).forEach(e=>{const [what,det]=describir(e);const row=el("div","log"+(e.accion==="borro"||e.accion==="elimino"?" del":""));
+    const d=new Date(e.t);row.appendChild(el("span","when",d.toLocaleDateString("es",{day:"numeric",month:"short"})+" "+d.toLocaleTimeString("es",{hour:"numeric",minute:"2-digit"})));
+    const txt=el("span");txt.append(el("span","who",e.nombre+" "),el("span","what",what));row.appendChild(txt);if(det)row.appendChild(el("span","det",det));box.appendChild(row);});
+  if(vis.length>500)box.appendChild(el("p","hint","Mostrando las 500 más recientes."));}
+function renderPapelera(){const box=$("p-list");box.innerHTML="";if(!papelera.length){box.appendChild(el("p","hint","La papelera está vacía."));return;}
+  papelera.forEach(r=>{const row=el("div","urow");const info=el("div");info.append(el("div","nm",r.negocio||"Sin nombre"),el("div","rl","Borrado por "+(r.borradoPorNombre||r.borradoPor||"")+" el "+fmt(r.borrado)+" · estaba en "+(LABEL[r.etapa]||r.etapa)));row.appendChild(info);
+    const acts=el("div","p-actions");
+    const accion=async(a)=>{try{const d=await api("papelera",{accion:a,id:r.id});papelera=d.papelera||[];confirmPerm=null;aplicar(d);renderPapelera();cargarActividad();}catch(e){if(e.message!=="401")status(e.message);}};
+    if(confirmPerm===r.id){acts.append("¿Eliminar para siempre? ");const y=el("button","btn small","Sí, eliminar");y.type="button";y.onclick=()=>accion("eliminar");const n=el("button","btn small ghost","Cancelar");n.type="button";n.onclick=()=>{confirmPerm=null;renderPapelera();};acts.append(y,n);}
+    else{const rb=el("button","btn small","Recuperar");rb.type="button";rb.onclick=()=>accion("restaurar");const db=el("button","btn small ghost","Eliminar para siempre");db.type="button";db.onclick=()=>{confirmPerm=r.id;renderPapelera();};acts.append(rb,db);}
+    row.appendChild(acts);box.appendChild(row);});}
+
 function status(t){$("status").textContent=t;}
 function renderAll(){renderLista();if(!$("v-panel").hidden)renderPanel();if(!$("v-msgs").hidden)renderMsgs();}
 
 // ---------- arranque ----------
 (async()=>{
-  try{const t=localStorage.getItem("tab");if(t&&t!=="lista"&&t!=="equipo"&&TABS.includes(t))tab(t);}catch(e){}
+  try{const t=localStorage.getItem("tab");if(t&&["panel","msgs"].includes(t))tab(t);}catch(e){}
   try{me=await api("yo");showApp();}catch(e){if(e.message!=="401")showLogin("No se pudo conectar. Revisa tu internet.");}
   setInterval(()=>{if(me&&document.visibilityState==="visible")cargar();},20000);
   document.addEventListener("visibilitychange",()=>{if(me&&document.visibilityState==="visible")cargar();});
