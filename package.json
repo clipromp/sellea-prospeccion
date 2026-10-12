@@ -7,6 +7,6 @@
     "hash": "node scripts/hash.mjs"
   },
   "dependencies": {
-    "@netlify/blobs": "^8.1.0"
+    "@netlify/blobs": "11.1.1"
   }
 }
