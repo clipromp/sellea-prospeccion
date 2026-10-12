@@ -1,0 +1,12 @@
+{
+  "name": "sellea-prospeccion",
+  "private": true,
+  "type": "module",
+  "description": "App de prospección de Sellea con inicio de sesión, en Netlify",
+  "scripts": {
+    "hash": "node scripts/hash.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}
