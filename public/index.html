@@ -136,6 +136,11 @@ td.best{color:var(--ok);font-weight:600}
 .modal{position:fixed;inset:0;background:rgba(10,6,25,.55);display:grid;place-items:center;padding:16px;z-index:20}
 .modal-in{width:100%;max-width:560px;max-height:90vh;overflow:auto;display:grid;gap:8px}
 .modal-x{justify-self:end}
+.tags{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.badge{background:var(--coral);color:#fff;font-size:11px;font-weight:600;border-radius:999px;padding:2px 8px}
+.tag{background:var(--no-soft);color:var(--ink);font-size:11px;font-weight:600;border-radius:999px;padding:2px 8px}
+.bm{display:inline-block;background:var(--coral);color:#fff;font-weight:600;text-decoration:none;border-radius:10px;padding:10px 16px;cursor:grab}
+.steps{margin:0;padding-left:20px;display:grid;gap:6px;font-size:14px}
 @media (max-width:480px){.form{grid-template-columns:1fr}.kpi .v{font-size:22px}.f-row{grid-template-columns:88px 1fr 58px}}
 @media (prefers-reduced-motion:no-preference){.f-bar i{transition:width .3s ease}}
 </style>
@@ -172,6 +177,7 @@ td.best{color:var(--ok);font-weight:600}
     <div class="toolbar">
       <button class="btn small" id="nuevo-toggle" type="button">+ Nuevo prospecto</button>
       <input id="q" type="search" placeholder="Buscar por negocio o Instagram" aria-label="Buscar">
+      <button class="btn small ghost" id="boton-ig" type="button">Botón de Instagram</button>
       <div class="seg" id="seg"><button type="button" data-v="tablero">Tablero</button><button type="button" data-v="lista">Lista</button></div>
     </div>
     <form class="card form" id="f-nuevo" autocomplete="off" hidden>
@@ -257,7 +263,7 @@ async function api(path,body){
   if(!r.ok)throw new Error(data.error||"No se pudo completar. Intenta de nuevo.");
   return data;
 }
-function aplicar(d){if(!d)return;if(d.prospectos)rows=d.prospectos;if(d.mensajes)textos=d.mensajes;status(rows.length+" prospectos");refreshMsgSelect();renderAll();}
+function aplicar(d){if(!d)return;if(d.prospectos)rows=d.prospectos;if(d.mensajes)textos=d.mensajes;status(rows.length+" prospectos");refreshMsgSelect();renderAll();if(d.prospectos&&typeof aplicarPendiente==="function")aplicarPendiente();}
 async function cargar(){try{aplicar(await api("datos"));}catch(e){if(e.message!=="401")status("Sin conexión. Reintentando…");}}
 
 // ---------- sesión ----------
@@ -289,7 +295,9 @@ $("f-nuevo").addEventListener("submit",async ev=>{ev.preventDefault();
   const negocio=$("n-negocio").value.trim();if(!negocio)return;
   const ig=$("n-ig").value.trim().replace(/^https?:\/\/(www\.)?instagram\.com\//i,"").replace(/[/?].*$/,"").replace(/^@/,"");
   const etapa=$("n-etapa").value;
-  const datos={negocio,instagram:ig,pais:$("n-pais").value,rubro:$("n-rubro").value,mensaje:$("n-msg").value,etapa,nota:$("n-nota").value.trim(),seguimientos:0,historial:historialHasta({},etapa)};
+  const dup=ig&&rows.find(r=>(r.instagram||"").toLowerCase()===ig.toLowerCase());
+  if(dup){$("n-hint").textContent="Ya está en el CRM: "+dup.negocio;modalId=dup.id;renderModal();return;}
+  const datos={negocio,instagram:ig,pais:$("n-pais").value,rubro:$("n-rubro").value,mensaje:$("n-msg").value,etapa,nota:$("n-nota").value.trim(),seguimientos:0,historial:historialHasta({},etapa),origen:"prospectado"};
   $("n-btn").disabled=true;
   try{aplicar(await api("prospectos",{accion:"crear",datos}));$("n-negocio").value="";$("n-ig").value="";$("n-nota").value="";$("n-hint").textContent="Agregado: "+negocio;$("n-negocio").focus();}
   catch(e){if(e.message!=="401")$("n-hint").textContent=e.message;}
@@ -304,12 +312,14 @@ function setWide(){$("v-app").classList.toggle("wide",!$("v-lista").hidden&&vist
 function renderSeg(){$("seg").querySelectorAll("button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.v===vista));}
 $("seg").querySelectorAll("button").forEach(b=>b.onclick=()=>{vista=b.dataset.v;try{localStorage.setItem("vista",vista)}catch(e){}renderLista();});
 $("nuevo-toggle").onclick=()=>{const f=$("f-nuevo");f.hidden=!f.hidden;$("nuevo-toggle").textContent=f.hidden?"+ Nuevo prospecto":"Cerrar formulario";if(!f.hidden)$("n-negocio").focus();};
-function visibles(){const q=$("q").value.trim().toLowerCase();const f=vista==="tablero"&&filtro!=="seguir"?"todos":filtro;
-  let vis=rows.filter(r=>f==="todos"||(f==="seguir"?necesitaSeguimiento(r):r.etapa===f));
+const filtroActivo=()=>vista==="tablero"&&!["seguir","nuevos"].includes(filtro)?"todos":filtro;
+function visibles(){const q=$("q").value.trim().toLowerCase();const f=filtroActivo();
+  let vis=rows.filter(r=>f==="todos"||(f==="seguir"?necesitaSeguimiento(r):f==="nuevos"?!!r.nuevoMensaje:r.etapa===f));
   if(q)vis=vis.filter(r=>(r.negocio||"").toLowerCase().includes(q)||(r.instagram||"").toLowerCase().includes(q));return vis;}
-function renderFilters(){const c={todos:rows.length,seguir:rows.filter(necesitaSeguimiento).length};ALL.forEach(([k])=>c[k]=rows.filter(r=>r.etapa===k).length);
-  const items=vista==="tablero"?[["todos","Todos"],["seguir","Toca seguimiento"]]:[["todos","Todos"],["seguir","Toca seguimiento"],...ALL];
-  const cur=vista==="tablero"&&filtro!=="seguir"?"todos":filtro;
+function renderFilters(){const c={todos:rows.length,seguir:rows.filter(necesitaSeguimiento).length,nuevos:rows.filter(r=>r.nuevoMensaje).length};ALL.forEach(([k])=>c[k]=rows.filter(r=>r.etapa===k).length);
+  const base=[["todos","Todos"],["nuevos","Mensajes nuevos"],["seguir","Toca seguimiento"]];
+  const items=vista==="tablero"?base:[...base,...ALL];
+  const cur=filtroActivo();
   const box=$("filters");box.innerHTML="";items.forEach(([k,l])=>{const b=el("button","chip",l);b.type="button";b.setAttribute("aria-pressed",cur===k);b.appendChild(el("span","n",String(c[k]||0)));b.onclick=()=>{filtro=k;renderLista();};box.appendChild(b);});}
 function renderBoard(){const b=$("board");const sx=b.scrollLeft;b.innerHTML="";const vis=visibles();
   ALL.forEach(([k,l])=>{const col=el("section","col");const items=vis.filter(r=>r.etapa===k);
@@ -324,7 +334,8 @@ function renderBoard(){const b=$("board");const sx=b.scrollLeft;b.innerHTML="";c
 function kcard(r){const c=el("div","k");c.tabIndex=0;c.setAttribute("role","button");c.setAttribute("aria-label","Abrir "+(r.negocio||"prospecto"));c.draggable=true;
   c.addEventListener("dragstart",e=>{e.dataTransfer.setData("text/plain",r.id);e.dataTransfer.effectAllowed="move";c.classList.add("dragging");});
   c.addEventListener("dragend",()=>c.classList.remove("dragging"));
-  const open=()=>{modalId=r.id;renderModal();};c.onclick=open;c.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();open();}};
+  const open=()=>{modalId=r.id;renderModal();if(r.nuevoMensaje)actualizar(r.id,{nuevoMensaje:false});};c.onclick=open;c.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();open();}};
+  if(r.nuevoMensaje||r.origen==="entrante"){const tg=el("div","tags");if(r.nuevoMensaje)tg.appendChild(el("span","badge","Mensaje nuevo"));if(r.origen==="entrante")tg.appendChild(el("span","tag","Entrante"));c.appendChild(tg);}
   c.appendChild(el("div","t",r.negocio||"Sin nombre"));
   c.appendChild(el("div","m",[r.instagram?"@"+r.instagram:null,r.pais,r.rubro].filter(Boolean).join(" · ")));
   const row=el("div","row");const seg=necesitaSeguimiento(r);row.appendChild(el("span",seg?"flag":"m",seg?"Toca seguimiento":"Msg "+(r.mensaje||"-")+(r.porNombre?" · "+r.porNombre:"")));
@@ -343,7 +354,8 @@ function renderLista(){renderSeg();renderFilters();setWide();$("list").hidden=vi
 function card(r){const c=el("article","p");
   const top=el("div","p-top");const left=el("div");left.style.minWidth="0";left.appendChild(el("div","p-name",r.negocio||"Sin nombre"));
   const meta=el("div","p-meta");if(r.instagram){const a=el("a",null,"@"+r.instagram);a.href="https://instagram.com/"+encodeURIComponent(r.instagram);a.target="_blank";a.rel="noopener";meta.append(a," · ");}
-  meta.append([r.pais,r.rubro,"Mensaje "+(r.mensaje||"-"),r.porNombre].filter(Boolean).join(" · "));left.appendChild(meta);
+  meta.append([r.pais,r.rubro,"Mensaje "+(r.mensaje||"-"),r.porNombre,r.origen==="entrante"?"Entrante":null].filter(Boolean).join(" · "));left.appendChild(meta);
+  if(r.nuevoMensaje){const tg=el("div","tags");tg.style.marginTop="6px";tg.appendChild(el("span","badge","Mensaje nuevo"));const vb=el("button","linkbtn","Marcar como visto");vb.type="button";vb.onclick=()=>actualizar(r.id,{nuevoMensaje:false});tg.appendChild(vb);left.appendChild(tg);}
   top.append(left,el("span","stage s-"+r.etapa,LABEL[r.etapa]||r.etapa));c.appendChild(top);
   if(r.nota)c.appendChild(el("div","p-note",r.nota));
   if(necesitaSeguimiento(r))c.appendChild(el("div","flag","Toca seguimiento · "+(r.seguimientos||0)+" de 2 hechos"));
@@ -386,7 +398,7 @@ function refreshMsgSelect(){const s=$("n-msg");opt(s,msgOpts(),s.value||"1");}
 
 // ---------- panel ----------
 const PERIODOS=[["hoy","Hoy"],["semana","Esta semana"],["mes","Este mes"],["todo","Todo"]];
-const DIMS=[["pais","País"],["rubro","Rubro"],["mensaje","Mensaje"],["porNombre","Persona"]];
+const DIMS=[["pais","País"],["rubro","Rubro"],["mensaje","Mensaje"],["origen","Origen"],["porNombre","Persona"]];
 function chips(box,items,cur,set){box.innerHTML="";items.forEach(([k,l])=>{const b=el("button","chip",l);b.type="button";b.setAttribute("aria-pressed",cur===k);b.onclick=()=>{set(k);renderPanel();};box.appendChild(b);});}
 const pct=(a,b)=>b?Math.round(a/b*100)+"%":"–";
 function renderPanel(){chips($("period"),PERIODOS,periodo,v=>periodo=v);chips($("split"),DIMS,dim,v=>dim=v);
@@ -398,7 +410,7 @@ function renderPanel(){chips($("period"),PERIODOS,periodo,v=>periodo=v);chips($(
   ETAPAS.forEach(([e,l],i)=>fila(l,c[e],e==="calentado"?" dim":"",i>1?pct(c[e],c[ETAPAS[i-1][0]])+" del paso anterior":""));
   fila("No interesa",c.no," dim","");
   const base=rows.filter(r=>inP(r.historial?.dm,periodo));const groups={};
-  base.forEach(r=>{const key=dim==="mensaje"?("Mensaje "+(r.mensaje||"-")):(r[dim]||"Sin dato");const g=groups[key]||(groups[key]={dm:0,resp:0,ag:0,pres:0,cerro:0});g.dm++;if(r.historial?.respondio)g.resp++;if(r.historial?.agendada)g.ag++;if(r.historial?.presentada)g.pres++;if(r.historial?.cerro)g.cerro++;});
+  base.forEach(r=>{const key=dim==="mensaje"?("Mensaje "+(r.mensaje||"-")):dim==="origen"?(r.origen==="entrante"?"Entrante":"Prospectado"):(r[dim]||"Sin dato");const g=groups[key]||(groups[key]={dm:0,resp:0,ag:0,pres:0,cerro:0});g.dm++;if(r.historial?.respondio)g.resp++;if(r.historial?.agendada)g.ag++;if(r.historial?.presentada)g.pres++;if(r.historial?.cerro)g.cerro++;});
   const t=$("tbl");t.innerHTML="";const head=el("tr");[DIMS.find(d=>d[0]===dim)[1],"DMs","Respuesta","Agendan","Se presentan","Cierran"].forEach(h=>head.appendChild(el("th",null,h)));const th=el("thead");th.appendChild(head);t.appendChild(th);
   const tb=el("tbody");const ents=Object.entries(groups).sort((a,b)=>b[1].dm-a[1].dm);
   const rate=g=>g.dm?g.ag/g.dm:0;const bestKey=ents.filter(([,g])=>g.dm>=5).sort((a,b)=>rate(b[1])-rate(a[1]))[0]?.[0];
@@ -432,6 +444,7 @@ const val=(k,v)=>v==null||v===""?"vacío":k==="etapa"?(LABEL[v]||v):k==="mensaje
 function describir(e){const n=e.negocio?"«"+e.negocio+"»":"";
   switch(e.accion){
     case "entro":return ["entró a la app",""];
+    case "mensaje-ig":return ["registró un mensaje nuevo de "+n,""];
     case "creo":return ["agregó "+n,"Etapa: "+(LABEL[e.etapa]||e.etapa||"")];
     case "borro":return ["borró "+n,"Quedó en la papelera"];
     case "restauro":return ["recuperó "+n+" de la papelera",""];
@@ -462,6 +475,26 @@ function renderPapelera(){const box=$("p-list");box.innerHTML="";if(!papelera.le
 
 function status(t){$("status").textContent=t;}
 function renderAll(){renderLista();if(!$("v-panel").hidden)renderPanel();if(!$("v-msgs").hidden)renderMsgs();}
+
+// ---------- botón "Agregar a Sellea" (marcador del navegador) ----------
+let pendiente=(()=>{try{const p=new URLSearchParams(location.search);const u=(p.get("nuevo")||"").replace(/^@/,"").trim();if(u){history.replaceState(null,"",location.pathname);return {u,n:(p.get("nombre")||"").trim()};}}catch(e){}return null;})();
+function aplicarPendiente(){if(!pendiente)return;const {u,n}=pendiente;pendiente=null;tab("lista");
+  const dup=rows.find(r=>(r.instagram||"").toLowerCase()===u.toLowerCase());
+  if(dup){status("Ya está en el CRM: "+dup.negocio);modalId=dup.id;renderModal();return;}
+  $("f-nuevo").hidden=false;$("nuevo-toggle").textContent="Cerrar formulario";
+  $("n-ig").value=u;$("n-negocio").value=n||u;$("n-etapa").value="dm";
+  $("n-hint").textContent="Revisa país, rubro y mensaje, y guarda.";$("n-pais").focus();}
+function bmFn(){var h=location.hostname,p=location.pathname.split("/").filter(Boolean)[0]||"",x=["explore","reels","reel","p","direct","stories","accounts"];if(!/(^|\.)instagram\.com$/.test(h)||!p||x.indexOf(p)>-1){alert("Abre el perfil de un negocio en Instagram y vuelve a tocar el botón.");return;}var m=document.querySelector('meta[property="og:title"]'),t=document.title||(m&&m.content)||"",n=t.indexOf(" (@")>-1?t.split(" (@")[0].trim():"";window.open("__ORIGEN__/?nuevo="+encodeURIComponent(p)+"&nombre="+encodeURIComponent(n),"_blank");}
+const BOOKMARKLET="javascript:"+encodeURIComponent("("+bmFn.toString().replace("__ORIGEN__",location.origin)+")()");
+$("boton-ig").onclick=()=>{modalId=null;const inn=$("modal-in");inn.innerHTML="";const x=el("button","btn small ghost modal-x","Cerrar");x.type="button";x.onclick=closeModal;
+  const c=el("div","card");c.style.display="grid";c.style.gap="14px";
+  c.appendChild(el("h2",null,"Botón Agregar a Sellea"));
+  c.appendChild(el("p","hint","Desde el perfil de un negocio en Instagram, un toque abre el CRM con su @ y su nombre ya escritos. Funciona en el navegador de la computadora."));
+  const a=el("a","bm","+ Agregar a Sellea");a.href=BOOKMARKLET;a.onclick=e=>{e.preventDefault();};c.appendChild(a);
+  const ol=el("ol","steps");["Muestra la barra de marcadores del navegador (en Chrome y Safari: Cmd + Shift + B).","Arrastra el botón coral de arriba hasta esa barra.","Abre Instagram en el navegador, entra al perfil de un negocio y toca el marcador.","Se abre el CRM con el negocio listo: elige país, rubro y mensaje, y guarda."].forEach(t=>ol.appendChild(el("li",null,t)));c.appendChild(ol);
+  c.appendChild(el("p","hint","En el celular: copia el enlace del perfil desde Instagram y pégalo en el campo Instagram del formulario; el CRM saca el @ solo. Si el negocio ya existe, te abre su tarjeta en vez de duplicarlo."));
+  const cp=el("button","btn small ghost","Copiar código del botón");cp.type="button";cp.onclick=async()=>{try{await navigator.clipboard.writeText(BOOKMARKLET);cp.textContent="Copiado";}catch(e){cp.textContent="No se pudo copiar";}};c.appendChild(cp);
+  inn.append(x,c);$("modal").hidden=false;};
 
 // ---------- arranque ----------
 (async()=>{

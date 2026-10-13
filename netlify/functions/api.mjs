@@ -76,7 +76,7 @@ async function todosLosUsuarios() {
 }
 
 // ---------- datos ----------
-const CAMPOS = ["negocio", "instagram", "pais", "rubro", "mensaje", "etapa", "nota", "seguimientos", "historial", "ultimoContacto"];
+const CAMPOS = ["negocio", "instagram", "pais", "rubro", "mensaje", "etapa", "nota", "seguimientos", "historial", "ultimoContacto", "nuevoMensaje", "origen"];
 const ETAPAS = ["calentado", "dm", "respondio", "agendada", "presentada", "cerro", "no"];
 function limpiar(d = {}) {
   const out = {};
@@ -89,6 +89,8 @@ function limpiar(d = {}) {
       if (v && typeof v === "object") for (const e of ETAPAS) if (typeof v[e] === "string") h[e] = v[e].slice(0, 40);
       out[k] = h;
     } else if (k === "etapa") { if (ETAPAS.includes(v)) out[k] = v; }
+    else if (k === "nuevoMensaje") out[k] = !!v;
+    else if (k === "origen") { if (["prospectado", "entrante"].includes(v)) out[k] = v; }
     else out[k] = String(v ?? "").slice(0, k === "nota" ? 1000 : 200);
   }
   return out;
@@ -124,6 +126,86 @@ function diferencias(antes = {}, despues = {}) {
   return c;
 }
 
+// ---------- Instagram: avisos de Meta (webhook) ----------
+// Variables en Netlify: META_VERIFY_TOKEN, META_APP_SECRET, IG_ACCESS_TOKEN y, opcional, IG_API_BASE
+const INSTAGRAM = { usuario: "instagram", nombre: "Instagram" };
+const ORDEN = { calentado: 0, dm: 1, respondio: 2, agendada: 3, presentada: 4, cerro: 5 };
+function historialHasta(h = {}, etapa, cuando) {
+  h = { ...h };
+  if (etapa === "no") { h.no = h.no || cuando; return h; }
+  for (const e of Object.keys(ORDEN)) if (ORDEN[e] <= ORDEN[etapa] && !h[e]) h[e] = cuando;
+  return h;
+}
+const igApi = () => (process.env.IG_API_BASE || "https://graph.instagram.com/v23.0").replace(/\/$/, "");
+async function perfilIG(igsid) {
+  const tok = process.env.IG_ACCESS_TOKEN;
+  if (!tok) return null;
+  try {
+    const r = await fetch(`${igApi()}/${encodeURIComponent(igsid)}?fields=username,name&access_token=${encodeURIComponent(tok)}`);
+    if (!r.ok) { console.error("Perfil de Instagram", r.status, (await r.text()).slice(0, 300)); return null; }
+    return await r.json();
+  } catch (e) { console.error("Perfil de Instagram", e); return null; }
+}
+function firmaMetaOk(cuerpoCrudo, cabecera) {
+  const secreto = process.env.META_APP_SECRET;
+  if (!secreto || !cabecera) return false;
+  const esperado = "sha256=" + crypto.createHmac("sha256", secreto).update(cuerpoCrudo).digest("hex");
+  const a = Buffer.from(cabecera), b = Buffer.from(esperado);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+async function procesarMensajeIG(igsid, eco, texto, ts) {
+  const cuando = new Date(ts || Date.now()).toISOString();
+  const items = (await store().get("prospectos", { type: "json" }))?.items || {};
+  let it = Object.values(items).find((x) => x.igsid === igsid);
+  let perfil = null;
+  if (!it) {
+    perfil = await perfilIG(igsid);
+    const user = (perfil?.username || "").toLowerCase();
+    if (user) it = Object.values(items).find((x) => (x.instagram || "").toLowerCase().replace(/^@/, "") === user);
+  }
+  if (eco) {
+    // Mensaje que salió de @selleala: solo cuenta si ese negocio ya está en el CRM
+    if (!it) return;
+    let antes = null, despues = null;
+    await mutar("prospectos", (cur) => {
+      const x = cur?.items?.[it.id];
+      if (!x) return cur;
+      antes = x;
+      const cambios = { igsid, ultimoContacto: cuando };
+      if (x.etapa === "calentado") { cambios.etapa = "dm"; cambios.historial = historialHasta(x.historial, "dm", cuando); }
+      despues = cur.items[it.id] = { ...x, ...cambios, actualizado: ahora() };
+      return cur;
+    });
+    if (antes && antes.etapa !== despues.etapa) await registrar(INSTAGRAM, "edito", { id: it.id, negocio: it.negocio, cambios: { etapa: [antes.etapa, despues.etapa] } });
+    return;
+  }
+  if (it) {
+    let antes = null, despues = null;
+    await mutar("prospectos", (cur) => {
+      const x = cur?.items?.[it.id];
+      if (!x) return cur;
+      antes = x;
+      const cambios = { igsid, nuevoMensaje: true, ultimoMensaje: cuando };
+      if (x.etapa === "calentado" || x.etapa === "dm") { cambios.etapa = "respondio"; cambios.historial = historialHasta(x.historial, "respondio", cuando); }
+      despues = cur.items[it.id] = { ...x, ...cambios, actualizado: ahora() };
+      return cur;
+    });
+    if (antes && antes.etapa !== despues.etapa) await registrar(INSTAGRAM, "edito", { id: it.id, negocio: it.negocio, cambios: { etapa: [antes.etapa, despues.etapa] } });
+    else if (antes) await registrar(INSTAGRAM, "mensaje-ig", { id: it.id, negocio: it.negocio });
+    return;
+  }
+  // Alguien nuevo le escribió a @selleala por su cuenta
+  const id = crypto.randomUUID();
+  const nuevo = {
+    id, negocio: perfil?.name || perfil?.username || "Contacto de Instagram", instagram: perfil?.username || "", igsid,
+    origen: "entrante", etapa: "respondio", historial: { respondio: cuando }, seguimientos: 0,
+    nuevoMensaje: true, ultimoMensaje: cuando, nota: texto ? "Primer mensaje: " + texto.slice(0, 200) : "",
+    creado: ahora(), actualizado: ahora(), por: INSTAGRAM.usuario, porNombre: INSTAGRAM.nombre,
+  };
+  await mutar("prospectos", (cur) => { cur = cur || { items: {} }; if (!Object.values(cur.items).some((x) => x.igsid === igsid)) cur.items[id] = nuevo; return cur; });
+  await registrar(INSTAGRAM, "creo", { id, negocio: nuevo.negocio, etapa: nuevo.etapa });
+}
+
 // ---------- rutas ----------
 export default async (req) => {
   const url = new URL(req.url);
@@ -141,6 +223,34 @@ export default async (req) => {
       if (!esperado || k.length !== esperado.length || !crypto.timingSafeEqual(Buffer.from(k), Buffer.from(esperado)))
         return json({ error: "No autorizado" }, 401);
       return json({ generado: ahora(), ...(await leerDatos()) });
+    }
+
+    // Webhook de Meta para los DMs de @selleala (no usa sesión: se valida con la firma de Meta)
+    if (ruta === "instagram") {
+      if (metodo === "GET") {
+        const p = url.searchParams;
+        const tok = process.env.META_VERIFY_TOKEN || "";
+        if (p.get("hub.mode") === "subscribe" && tok && p.get("hub.verify_token") === tok)
+          return new Response(p.get("hub.challenge") || "", { status: 200, headers: { "content-type": "text/plain" } });
+        return new Response("Token de verificación incorrecto", { status: 403 });
+      }
+      if (metodo === "POST") {
+        const crudo = await req.text();
+        if (!firmaMetaOk(crudo, req.headers.get("x-hub-signature-256"))) return new Response("Firma no válida", { status: 401 });
+        let body = {};
+        try { body = JSON.parse(crudo); } catch { return new Response("ok"); }
+        for (const entry of body.entry || []) {
+          for (const ev of entry.messaging || []) {
+            if (!ev.message || ev.message.is_deleted) continue;
+            const eco = !!ev.message.is_echo;
+            const igsid = eco ? ev.recipient?.id : ev.sender?.id;
+            if (!igsid || igsid === entry.id) continue;
+            try { await procesarMensajeIG(igsid, eco, ev.message.text || "", ev.timestamp); }
+            catch (e) { console.error("Webhook de Instagram", e); }
+          }
+        }
+        return new Response("ok");
+      }
     }
 
     if (ruta === "login" && metodo === "POST") {
